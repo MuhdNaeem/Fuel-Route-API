@@ -270,13 +270,4 @@ A complete Postman test suite is provided in the `docs/` directory:
 
 ---
 
-## 5-Minute Technical Interview & Demo Guide
 
-| Time | Action | What to Say / Demonstrate |
-|------|--------|---------------------------|
-| **0:00 - 1:00** | **Postman Demo #1.1 (Cold Call)** | *"Here we run a 2,800-mile cross-country trip from LA to NY. Notice the 3 external calls in `meta` (2 geocodes + 1 route) taking ~1.2s. The response includes the GeoJSON route, fuel stops with exact mile markers, and verified 10 MPG consumption."* |
-| **1:00 - 1:30** | **Postman Demo #1.2 (Cache Warm)** | *"Re-running the identical request: response time drops from 1,200ms to <15ms, and `external_api_calls` drops to 0. All routes and coordinates are hashed and cached."* |
-| **1:30 - 2:30** | **Interactive Swagger UI (`/api/docs/`)** | *"We implemented `drf-spectacular` for complete OpenAPI 3.0 documentation. Demonstrating live execution directly from Swagger with request/response schemas."* |
-| **2:30 - 3:30** | **Architecture Walkthrough (`route_planner.py` & `optimizer.py`)** | *"We decoupled the HTTP view from domain logic. `stations.py` uses a SciPy `cKDTree` on a 3-D unit sphere for spatial filtering in 3ms. `optimizer.py` implements an optimal greedy rule: leapfrogging expensive stations to buy at cheaper ones ahead."* |
-| **3:30 - 4:15** | **Edge Cases & Error Defense (#2.1 - #2.5)** | *"Show boundary defenses: non-US locations rejected with 400, coordinate inputs outside lower 48, missing fields with RFC-aligned error details, and upstream 429 rate limit diagnostics."* |
-| **4:15 - 5:00** | **Automated Test Suite Execution** | *Execute `python manage.py test routing`. "32 comprehensive unit and integration tests executing in 0.18s, verifying every invariant and failure mode."* |
