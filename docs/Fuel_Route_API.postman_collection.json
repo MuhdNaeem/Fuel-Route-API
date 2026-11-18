@@ -1,0 +1,511 @@
+{
+  "info": {
+    "name": "Fuel Route Optimizer API",
+    "description": "Production-grade REST collection for the Fuel Route Optimizer API. Includes system health checks, happy path road trips, caching validations, input boundary defenses, and error scenarios. Import together with Fuel_Route_API.postman_environment.json.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. System Health & Documentation",
+      "item": [
+        {
+          "name": "0.1 Service Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/health/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "health", ""]
+            },
+            "description": "Verifies that the API service is operational, SQLite database is connected with indexed fuel stations, and the in-memory cache is functioning."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('Service status is healthy', () => pm.expect(d.status).to.eql('healthy'));",
+                  "pm.test('Database is connected', () => pm.expect(d.database).to.eql('connected'));",
+                  "pm.test('Stations are indexed', () => pm.expect(d.stations_indexed).to.be.above(6000));",
+                  "pm.test('Cache is operational', () => pm.expect(d.cache).to.eql('operational'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "0.2 OpenAPI 3.0 Schema",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/schema/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "schema", ""]
+            },
+            "description": "Retrieves the OpenAPI 3.0 machine-readable specification schema."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Has OpenAPI specification', () => pm.expect(pm.response.text()).to.include('openapi'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Happy Path Scenarios",
+      "item": [
+        {
+          "name": "1.1 Cross-Country Trip (Los Angeles, CA -> New York, NY)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Long-distance cross-country trip (~2,800 miles). On cold cache makes 2 geocodes + 1 directions call. Demonstrates optimal fuel stop selection, 500-mile range compliance, and downsampled LineString geometry.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Los Angeles, CA\",\n  \"finish\": \"New York, NY\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "pm.test('Response time under 5000ms', () => pm.expect(pm.response.responseTime).to.be.below(5000));",
+                  "const d = pm.response.json();",
+                  "pm.test('Route geometry is GeoJSON LineString', () => {",
+                  "    pm.expect(d.route.geometry.type).to.eql('LineString');",
+                  "    pm.expect(d.route.geometry.coordinates).to.be.an('array').with.length.above(10);",
+                  "});",
+                  "pm.test('Total gallons consumed equals distance / 10 MPG', () => {",
+                  "    pm.expect(d.summary.total_gallons).to.be.closeTo(d.route.distance_miles / 10, 0.5);",
+                  "});",
+                  "pm.test('No leg between stops exceeds 500 miles', () => {",
+                  "    let prevMarker = 0.0;",
+                  "    d.fuel_stops.forEach(stop => {",
+                  "        pm.expect(stop.mile_marker - prevMarker).to.be.at.most(500.0);",
+                  "        prevMarker = stop.mile_marker;",
+                  "    });",
+                  "    pm.expect(d.route.distance_miles - prevMarker).to.be.at.most(500.0);",
+                  "});",
+                  "pm.test('External API calls <= 3 on cold run', () => {",
+                  "    pm.expect(d.meta.external_api_calls).to.be.at.most(3);",
+                  "});",
+                  "pm.test('Starting tank is properly accounted', () => {",
+                  "    pm.expect(d.starting_tank.gallons).to.be.at.most(50.0);",
+                  "    pm.expect(d.starting_tank.cost).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.2 Cached Query Verification (Run immediately after 1.1)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submits the identical trip as 1.1. Verifies that the in-process cache returns in <50ms with exactly 0 external API calls.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Los Angeles, CA\",\n  \"finish\": \"New York, NY\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('Warm cache uses 0 external API calls', () => {",
+                  "    pm.expect(d.meta.external_api_calls).to.eql(0);",
+                  "});",
+                  "pm.test('Cache response is ultra fast (<150ms)', () => {",
+                  "    pm.expect(d.meta.processing_ms).to.be.below(150);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.3 Mid-Length Route (Chicago, IL -> Denver, CO)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Mid-distance trip (~1,000 miles). Tests interstate highway corridor matching and fuel optimization through Nebraska.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Chicago, IL\",\n  \"finish\": \"Denver, CO\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('Valid stops planned', () => pm.expect(d.fuel_stops.length).to.be.above(0));",
+                  "pm.test('Gallons match 10 MPG requirement', () => {",
+                  "    pm.expect(d.summary.total_gallons).to.be.closeTo(d.route.distance_miles / 10, 0.5);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.4 Coordinates Input (1 External Call)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submits raw 'lat,lng' coordinates. Demonstrates that geocoding is bypassed and exactly 1 external directions call is made on cold cache.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"34.05,-118.24\",\n  \"finish\": \"40.71,-74.00\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('Coordinates input makes at most 1 external call', () => {",
+                  "    pm.expect(d.meta.external_api_calls).to.be.at.most(1);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.5 Short Trip - Zero Fuel Stops Needed (Dallas, TX -> Houston, TX)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Trip under 500 miles (~240 miles). Demonstrates that zero fuel stops are required, and the departure tank is valued at the first candidate station price.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Dallas, TX\",\n  \"finish\": \"Houston, TX\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('Zero fuel stops needed', () => pm.expect(d.fuel_stops.length).to.eql(0));",
+                  "pm.test('Departure tank cost matches distance burned', () => {",
+                  "    pm.expect(d.summary.total_fuel_cost_usd).to.eql(d.starting_tank.cost);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "1.6 GET Method with Query Parameters (Atlanta, GA -> Phoenix, AZ)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/route/?start=Atlanta, GA&finish=Phoenix, AZ",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""],
+              "query": [
+                {
+                  "key": "start",
+                  "value": "Atlanta, GA"
+                },
+                {
+                  "key": "finish",
+                  "value": "Phoenix, AZ"
+                }
+              ]
+            },
+            "description": "Demonstrates GET query parameter support on the same route planning endpoint."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 200 OK', () => pm.response.to.have.status(200));",
+                  "const d = pm.response.json();",
+                  "pm.test('Route calculated via GET', () => pm.expect(d.route.distance_miles).to.be.above(1500));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Validation & Edge Cases",
+      "item": [
+        {
+          "name": "2.1 Non-US Location Rejected (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submitting a location outside the contiguous United States returns 400 Bad Request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Toronto, Canada\",\n  \"finish\": \"Chicago, IL\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', () => pm.response.to.have.status(400));",
+                  "const d = pm.response.json();",
+                  "pm.test('Error field exists with descriptive message', () => {",
+                  "    pm.expect(d.error).to.be.a('string').and.not.be.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.2 Missing Required Field (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submitting payload missing 'finish' returns 400 Bad Request with standardized error details.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Chicago, IL\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', () => pm.response.to.have.status(400));",
+                  "const d = pm.response.json();",
+                  "pm.test('Error message notes missing field', () => {",
+                  "    pm.expect(d.error).to.include('finish');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.3 Identical Start and Finish (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submitting identical start and finish points returns 400 Bad Request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"Chicago, IL\",\n  \"finish\": \"Chicago, IL\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', () => pm.response.to.have.status(400));",
+                  "const d = pm.response.json();",
+                  "pm.test('Error indicates identical locations', () => {",
+                  "    pm.expect(d.error).to.include('identical');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.4 Empty String Location (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submitting whitespace-only locations returns 400 Bad Request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"   \",\n  \"finish\": \"Denver, CO\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2.5 Coordinates Outside Contiguous USA (400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/route/",
+              "host": ["{{base_url}}"],
+              "path": ["api", "route", ""]
+            },
+            "description": "Submitting coordinates outside the lower 48 states (e.g. London UK: 51.5,-0.12) returns 400 Bad Request.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"start\": \"51.5,-0.12\",\n  \"finish\": \"41.88,-87.63\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status is 400 Bad Request', () => pm.response.to.have.status(400));",
+                  "const d = pm.response.json();",
+                  "pm.test('Error explains location is outside USA', () => {",
+                  "    pm.expect(d.error.toLowerCase()).to.include('outside the contiguous united states');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
